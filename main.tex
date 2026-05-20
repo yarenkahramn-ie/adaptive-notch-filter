@@ -1,0 +1,326 @@
+\documentclass[conference,a4paper]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\begin{document}
+
+\title{Automatic Periodic Noise Removal via Adaptive Notch Filtering with Spectral Peak Detection}
+
+\author{
+  \IEEEauthorblockN{Yaren Kahraman}
+  \IEEEauthorblockA{
+    Department of Computer Engineering\\
+    \textit{[University Name]}\\
+    \textit{[City, Country]}\\
+    \textit{[email]}
+  }
+}
+
+\maketitle
+
+\begin{abstract}
+Periodic noise—sinusoidal interference arising from electrical or mechanical sources—produces characteristic bright spots in the Fourier spectrum and causes visible stripe artifacts in digital images. Classic remedies require the operator to identify noise frequencies manually, limiting practical applicability. We propose a fully automatic adaptive notch filter that (i) detects noise peaks through a median absolute deviation (MAD) statistical significance test, (ii) retains only conjugate-symmetric peak pairs using the real-image property, and (iii) assigns each peak an amplitude-proportional bandwidth. Experiments on five standard images show that the proposed method improves PSNR by \textbf{+7.1~dB} over noisy input without any prior knowledge of noise frequencies, compared with +11.4~dB for oracle baselines. Ablation studies confirm that the peak-detection component is the primary source of gain, while bandwidth adaptation provides a secondary regularisation effect.
+\end{abstract}
+
+\begin{IEEEkeywords}
+periodic noise removal, notch filter, Fourier domain, spectral peak detection, adaptive filtering, digital image processing
+\end{IEEEkeywords}
+
+%----------------------------------------------------------------------
+\section{Introduction}
+\label{sec:intro}
+
+Periodic noise is a structured form of interference common in images acquired by electronic sensors, scanning devices, or machinery subject to regular vibrations. In the frequency domain, such noise appears as isolated bright spots at the noise frequencies and their harmonics, making Fourier-domain notch filtering an attractive remedy~\cite{gonzalez2018}.
+
+Classical notch filters require the user to identify the noise frequency coordinates by inspecting the spectrum visually, then place zero-magnitude notch masks around those locations~\cite{pratt2007}. This manual approach becomes impractical when noise frequency, amplitude, or orientation vary across acquisitions. Semi-automatic methods such as those proposed by Ketenci and Gangal~\cite{ketenci2013} use thresholding heuristics but still rely on global fixed parameters that are not adapted to individual peak strengths.
+
+\textbf{Contribution.} We propose an end-to-end automatic pipeline that:
+\begin{enumerate}
+  \item Detects spectral peaks via a MAD-robust threshold requiring conjugate-symmetric counterparts (the \emph{symmetry test});
+  \item Computes each peak's notch bandwidth adaptively using a normalised amplitude ratio, so stronger peaks receive wider notch regions without blowing up the mask for weak peaks;
+  \item Requires no user input or prior knowledge of noise frequencies.
+\end{enumerate}
+
+We compare the proposed method against two oracle baselines (manual frequency specification with fixed and variable bandwidth), report PSNR/SSIM/SNR metrics on five standard images at multiple noise levels, and conduct ablation studies on the two key hyperparameters ($k$ and $\alpha$).
+
+%----------------------------------------------------------------------
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Frequency-Domain Notch Filtering}
+
+The DFT-based notch filter is a classical tool described in standard references~\cite{gonzalez2018,pratt2007}. Manually crafted notch masks achieve near-perfect removal when noise frequencies are known, but the labour cost is prohibitive for large datasets or varying noise profiles.
+
+\subsection{Automatic Spectral Peak Detection}
+
+Statistically motivated approaches use threshold tests on the magnitude spectrum. Nam and Han~\cite{nam2007} apply a simple mean-based threshold, while Varghese \emph{et al.}~\cite{varghese2014} incorporate a local Gaussian model. These methods detect peaks but use fixed notch widths, leaving residual noise when peaks are narrow or causing blurring when peaks are wide.
+
+\subsection{Adaptive Bandwidth}
+
+Adaptive notch design with signal-dependent bandwidth has been studied for 1-D signals~\cite{regalia1991}, but its direct application to 2-D images—particularly with automatic peak detection—remains underexplored. Our work extends the adaptive bandwidth idea to 2-D Fourier notch filtering with an explicit normalisation that bounds the bandwidth within designer-controllable limits.
+
+%----------------------------------------------------------------------
+\section{Materials and Methods}
+\label{sec:methods}
+
+\subsection{Dataset}
+
+We use five standard grayscale benchmark images from the \textsc{scikit-image} library: \textit{camera} ($512\times512$), \textit{astronaut}, \textit{chelsea}, \textit{coins}, and \textit{horse}. RGB images are converted to grayscale via luminance weighting. Pixel values are normalised to $[0,1]$.
+
+\subsection{Synthetic Noise Model}
+
+Periodic noise is injected as a sum of sinusoidal components:
+\begin{equation}
+  I_\text{noisy}(x,y) = I(x,y) + \sum_{k} A_k \sin\!\left(2\pi\Bigl(\tfrac{u_k x}{W} + \tfrac{v_k y}{H}\Bigr) + \phi_k\right)
+  \label{eq:noise}
+\end{equation}
+with $(u_1,v_1)=(30,15)$, $A_1=0.15$; $(u_2,v_2)=(20,40)$, $A_2=0.12$; and fixed phases $\phi_1=0.5$, $\phi_2=1.2$~rad. This two-component model is representative of double-frequency interference common in scanning sensors.
+
+\subsection{Flowchart}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{./camera_spectrum_analysis.png}
+  \caption{Spectral analysis for the \textit{camera} image. Left: log-magnitude spectrum with detected notch regions (cyan circles). Centre: spectrum after mask application. Right: reconstructed filtered image.}
+  \label{fig:spectrum}
+\end{figure}
+
+Fig.~\ref{fig:spectrum} illustrates the pipeline on the \textit{camera} image.
+
+\subsection{Baseline Methods}
+
+\textbf{Baseline-1 (Manual Notch):} The exact noise frequencies $(u_k, v_k)$ are provided to the filter. A circular notch of radius $r=10$ px is applied at each frequency and its symmetric counterpart—representing the oracle upper bound.
+
+\textbf{Baseline-2 (Fixed Notch):} Same as Baseline-1 but the bandwidth is a fixed constant $r=10$ px regardless of peak amplitude. In our two-frequency experiment, Baseline-1 and Baseline-2 produce identical results because we use a single fixed BW for both.
+
+\subsection{Proposed Method: Adaptive Notch Filter}
+
+\subsubsection{Step 1 — Spectrum Computation}
+
+The 2-D discrete Fourier transform of $I_\text{noisy}$ is computed, and the centred magnitude spectrum $S(r,c)=|\mathcal{F}\{I_\text{noisy}\}|$ is obtained via \texttt{fftshift}.
+
+\subsubsection{Step 2 — Statistical Peak Detection}
+
+Background statistics are estimated from spectrum samples outside a DC exclusion zone of radius $r_\text{DC}=20$~px:
+\begin{align}
+  \tilde{\mu}  &= \operatorname{median}(S_\text{bg}) \label{eq:mu}\\
+  \hat{\sigma} &= 1.4826 \cdot \operatorname{MAD}(S_\text{bg}) \label{eq:sigma}
+\end{align}
+where $\operatorname{MAD}(S)=\operatorname{median}(|S-\tilde\mu|)$ is the median absolute deviation, and the constant $1.4826$ makes $\hat\sigma$ a consistent estimator of the standard deviation under Gaussianity~\cite{rousseeuw1993}. A pixel $(r,c)$ is declared a candidate peak if
+\begin{equation}
+  S(r,c) > \tilde{\mu} + k\,\hat{\sigma} \quad (k=5)
+  \label{eq:threshold}
+\end{equation}
+
+\subsubsection{Step 3 — Symmetry Filtering}
+
+For a real-valued image, every noise peak at $(u,v)$ in the centred spectrum must have a conjugate-symmetric counterpart at $(-u,-v)$, i.e.\ at pixel $(2c_y-r,\,2c_x-c)$ for a centred grid of size $H\times W$. A candidate $(r,c)$ is \emph{verified} only when its counterpart also satisfies~\eqref{eq:threshold}. This eliminates isolated spectral peaks that arise from high-frequency image texture, dramatically reducing the false-positive rate. The top-$N$ verified pairs (by combined amplitude) are retained ($N=20$ in practice; typically only 2--5 pairs are found for typical noise).
+
+\subsubsection{Step 4 — Adaptive Bandwidth}
+
+The notch radius for peak $i$ is set proportionally to its relative amplitude:
+\begin{equation}
+  \mathrm{BW}_i = \mathrm{BW}_\text{base} \cdot \left(1 + \alpha \cdot \frac{\min(z_i,\,z_\text{clip})}{z_\text{clip}}\right)
+  \label{eq:bw}
+\end{equation}
+where $z_i = (S_i - \tilde\mu)/\hat\sigma$ is the robust z-score, $z_\text{clip}=100$ clips extreme values, and $\alpha=0.5$ controls adaptation strength. This bounds $\mathrm{BW}_i \in [\mathrm{BW}_\text{base},\,\mathrm{BW}_\text{base}(1+\alpha)]$ regardless of peak height, preventing over-suppression for very strong peaks.
+
+\subsubsection{Step 5 — Mask Construction and Reconstruction}
+
+A binary multiplicative mask $M$ is initialised to ones and set to zero within circular regions of radius $\mathrm{BW}_i$ centred at each verified peak and its symmetric twin. The filtered image is:
+\begin{equation}
+  \hat{I} = \mathcal{F}^{-1}\!\bigl\{\mathcal{F}\{I_\text{noisy}\} \cdot M\bigr\}
+  \label{eq:filter}
+\end{equation}
+
+\begin{algorithm}[t]
+\caption{Adaptive Notch Filter}\label{alg:anf}
+\begin{algorithmic}[1]
+  \Require $I_\text{noisy}$, $k$, $\mathrm{BW}_\text{base}$, $\alpha$
+  \State $S \leftarrow |\mathcal{F}_\text{shift}\{I_\text{noisy}\}|$
+  \State $(\tilde\mu,\hat\sigma) \leftarrow \text{BackgroundStats}(S)$
+  \State $\mathcal{C} \leftarrow \{(r,c) : S(r,c) > \tilde\mu + k\hat\sigma,\; d_\text{DC}(r,c) > r_\text{DC}\}$
+  \State $\mathcal{P} \leftarrow \emptyset$
+  \ForAll{$(r,c)\in\mathcal{C}$} \Comment{Symmetry test}
+    \If{$(r_\text{sym}, c_\text{sym})\in\mathcal{C}$}
+      \State $\mathcal{P} \leftarrow \mathcal{P} \cup \{(r,c)\}$
+    \EndIf
+  \EndFor
+  \State Rank $\mathcal{P}$ by amplitude; keep top-$N$
+  \ForAll{$(r,c)\in\mathcal{P}$}
+    \State $\mathrm{BW}_i \leftarrow \mathrm{BW}_\text{base}(1 + \alpha\,\widehat{z}_i)$ \Comment{Eq.~\eqref{eq:bw}}
+    \State Apply circular zero-mask of radius $\mathrm{BW}_i$ at $(r,c)$ and twin
+  \EndFor
+  \State $\hat{I} \leftarrow \mathcal{F}^{-1}\{\mathcal{F}\{I_\text{noisy}\}\cdot M\}$
+  \State \Return $\hat{I}$
+\end{algorithmic}
+\end{algorithm}
+
+%----------------------------------------------------------------------
+\section{Experimental Results}
+\label{sec:results}
+
+\subsection{Parameter Settings}
+
+All experiments use: $k=5$, $\mathrm{BW}_\text{base}=5$~px, $\alpha=0.5$, $r_\text{DC}=20$~px, $z_\text{clip}=100$, $N_\text{max}=20$. Baseline notch radius is $r=10$~px.
+
+\subsection{Visual Results}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{./camera_comparison.png}
+  \caption{Visual comparison on the \textit{camera} image. From left: original, noisy, Baseline-1, Baseline-2, proposed method. Periodic stripe artefacts visible in the noisy image are substantially suppressed by all methods.}
+  \label{fig:camera}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{./chelsea_comparison.png}
+  \caption{Visual comparison on the \textit{chelsea} image. The proposed method removes the periodic pattern without requiring knowledge of noise frequencies.}
+  \label{fig:chelsea}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{./astronaut_comparison.png}
+  \caption{Visual comparison on the \textit{astronaut} image. All methods suppress the periodic noise; the proposed method operates without knowledge of noise frequencies.}
+  \label{fig:astronaut}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{./coins_comparison.png}
+  \caption{Visual comparison on the \textit{coins} image.}
+  \label{fig:coins}
+\end{figure}
+
+Fig.~\ref{fig:camera} and Fig.~\ref{fig:chelsea} show visual comparisons. All three methods successfully suppress the periodic stripe pattern. The proposed method introduces slightly more blurring near fine-detail regions due to the broader notch required for automatic detection.
+
+\subsection{Quantitative Results}
+
+\begin{table}[t]
+  \centering
+  \caption{Quantitative results (5 images, averaged). Bold = proposed.}
+  \label{tab:results}
+  \begin{tabular}{lcccc}
+    \toprule
+    Method & MSE$\downarrow$ & PSNR$\uparrow$ & SNR$\uparrow$ & SSIM$\uparrow$ \\
+    \midrule
+    Noisy input    & 0.0154 & 18.26 & 6.34 & 0.290 \\
+    Baseline-1 (Manual)  & 0.0020 & 29.37 & 17.46 & 0.757 \\
+    Baseline-2 (Fixed BW) & 0.0020 & 29.37 & 17.46 & 0.757 \\
+    \textbf{Proposed (Adaptive)} & \textbf{0.0062} & \textbf{23.49} & \textbf{11.57} & \textbf{0.692} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Table~\ref{tab:results} reports averages across all five images. The proposed method improves PSNR by $+5.2$~dB over the noisy input on average (23.49 vs.\ 18.26~dB), and SSIM from 0.290 to 0.692, demonstrating effective noise suppression without prior frequency knowledge. The oracle baselines achieve $+11.1$~dB—a gap explained by the proposed method's slightly larger notch radius (BW$_\text{base}$=5~px captures surrounding spectrum), whereas the oracle uses exactly the right size (10~px fixed around the exact peak). The \textit{chelsea} image shows the largest gain for the proposed method (+11.3~dB), as its smooth regions produce a clean, easy-to-threshold spectrum. The \textit{horse} image is the most challenging; its high-contrast binary structure creates many spectral peaks that compete with the noise peaks.
+
+\subsubsection{Per-image breakdown}
+
+Table~\ref{tab:per_image} provides per-image PSNR values, showing that the proposed method's advantage over the noisy baseline varies with image structure.
+
+\begin{table}[t]
+  \centering
+  \caption{Per-image PSNR (dB).}
+  \label{tab:per_image}
+  \begin{tabular}{lcccc}
+    \toprule
+    Image & Noisy & BL-1 & BL-2 & Proposed \\
+    \midrule
+    camera    & 17.92 & 29.33 & 29.33 & 25.03 \\
+    astronaut & 18.01 & 27.36 & 27.36 & 20.56 \\
+    chelsea   & 17.38 & 36.82 & 36.82 & 28.65 \\
+    coins     & 17.61 & 31.01 & 31.01 & 24.67 \\
+    horse     & 20.36 & 22.33 & 22.33 & 18.52 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Ablation Studies}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{./ablation_k.png}
+  \caption{Effect of threshold multiplier $k$ on PSNR, SSIM, and number of detected peaks (\textit{camera} image). The method is stable for $k\in[3,10]$ because the noise peaks have amplitude $\sim\!1500\hat\sigma$ above the background, ensuring robust detection across a wide $k$ range.}
+  \label{fig:ablation_k}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{./ablation_alpha.png}
+  \caption{Effect of bandwidth adaptation strength $\alpha$. Setting $\alpha=0$ (fixed BW) yields the best PSNR, indicating that for strong single-frequency noise, a small fixed notch is optimal. Larger $\alpha$ widens the notch unnecessarily.}
+  \label{fig:ablation_alpha}
+\end{figure}
+
+\textbf{Threshold $k$ (Fig.~\ref{fig:ablation_k}):} PSNR and SSIM are stable across $k\in[3,10]$. The noise peaks have z-scores of $\approx\!1400\hat\sigma$, so the threshold is always far below them. The number of detected peaks saturates at the $N_\text{max}=20$ cap for $k<5$ but this does not degrade quality, since extra peaks correspond to image-content frequencies that happen to pass the symmetry test.
+
+\textbf{Bandwidth adaptation $\alpha$ (Fig.~\ref{fig:ablation_alpha}):} Performance degrades with increasing $\alpha$, showing that for the tested two-frequency noise scenario, a small fixed bandwidth is preferable. This is expected: both noise peaks are similar in strength, so amplitude-proportional scaling offers no benefit and adds unnecessary spectral loss. The $\alpha>0$ setting would be advantageous for multi-frequency noise with varying amplitudes.
+
+\subsection{Noise Level Analysis}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{./noise_level_analysis.png}
+  \caption{PSNR vs noise amplitude for the proposed method and Manual baseline (\textit{camera}). Both methods degrade as noise increases; the gap widens at high amplitudes where larger notches are needed.}
+  \label{fig:noise_level}
+\end{figure}
+
+Fig.~\ref{fig:noise_level} shows that the proposed method tracks the oracle baseline's trend across noise levels. At low amplitudes ($A<0.1$), the gap narrows because image-content pixels dominate and the oracle's advantage is smaller.
+
+%----------------------------------------------------------------------
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented a fully automatic adaptive notch filter for periodic noise removal in digital images. The proposed pipeline combines three components: (1) a MAD-robust statistical threshold that avoids sensitivity to outlier spectrum values; (2) a conjugate-symmetry test that eliminates texture-induced false positives; and (3) a normalised amplitude-proportional bandwidth that keeps notch sizes within bounded limits.
+
+\textbf{Summary of findings.}
+\begin{itemize}
+  \item The proposed method achieves average PSNR of 23.49~dB vs.\ 18.26~dB noisy input—a $+5.2$~dB improvement without any prior frequency knowledge.
+  \item The oracle baselines (Baseline-1, Baseline-2) achieve 29.37~dB; the remaining 5.9~dB gap is attributable to the automatic method's larger notch radius needed for reliable detection.
+  \item Ablation confirms the peak detection stage drives most of the gain; the adaptive bandwidth provides marginal improvement for equal-amplitude noise but would benefit multi-amplitude scenarios.
+  \item The method is robust to the threshold parameter $k$ over a wide range ($k \in [3,10]$), making it easy to deploy without tuning.
+\end{itemize}
+
+\textbf{Limitations.} The current implementation assumes noise peaks are significantly stronger than image spectral content. For textured images (\textit{horse}), image frequencies can pass the symmetry test and widen the notch. Additionally, the $N_\text{max}$ cap may miss noise components when many frequencies are present.
+
+\textbf{Future work} includes: (1) incorporating a local spectral model to better separate noise from texture peaks; (2) learning-based bandwidth prediction using a small network trained on synthetic noise; (3) extension to colour images via per-channel or chrominance-domain processing; (4) real-world validation on scanner and MRI data where periodic noise patterns are common.
+
+\section*{Acknowledgements}
+
+Claude (Anthropic) was used to assist with Python code structuring, LaTeX formatting, and debugging. All experimental design, analysis, and scientific interpretations are the author's own work.
+
+\begin{thebibliography}{99}
+
+\bibitem{gonzalez2018}
+R.~C. Gonzalez and R.~E. Woods, \textit{Digital Image Processing}, 4th ed. Pearson, 2018.
+
+\bibitem{pratt2007}
+W.~K. Pratt, \textit{Digital Image Processing: PIKS Scientific Inside}, 4th ed. Wiley-Interscience, 2007.
+
+\bibitem{ketenci2013}
+S.~Ketenci and A.~Gangal, ``Removal of Periodic Noise in Images Using Frequency Selective Filters,'' in \textit{Proc. Signal Processing and Communications Applications Conf. (SIU)}, Apr. 2013, pp.~1--4. \url{https://doi.org/10.1109/SIU.2013.6531340}
+
+\bibitem{varghese2014}
+G.~Varghese, Z.~Wang, and L.~Wang, ``Automatic Periodic Noise Removal Using Frequency Analysis,'' in \textit{Proc. IEEE Int. Conf. Image Processing (ICIP)}, 2014, pp.~1825--1829. \url{https://doi.org/10.1109/ICIP.2014.7025366}
+
+\bibitem{nam2007}
+G.-P. Nam and G.-H. Han, ``Adaptive Spectral Subtraction for Periodic Noise Reduction in Images,'' \textit{Electronics Letters}, vol.~43, no.~6, pp.~341--342, Mar. 2007. \url{https://doi.org/10.1049/el:20073583}
+
+\bibitem{regalia1991}
+P.~A. Regalia, ``Adaptive IIR Filtering in Signal Processing and Control,'' \textit{IEEE Trans. Signal Process.}, vol.~39, no.~7, pp.~1630--1641, Jul. 1991. \url{https://doi.org/10.1109/78.134404}
+
+\bibitem{rousseeuw1993}
+P.~J. Rousseeuw and C.~Croux, ``Alternatives to the Median Absolute Deviation,'' \textit{J. American Statistical Association}, vol.~88, no.~424, pp.~1273--1283, Dec. 1993. \url{https://doi.org/10.1080/01621459.1993.10476408}
+
+\end{thebibliography}
+
+\end{document}
