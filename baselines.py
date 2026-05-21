@@ -92,3 +92,44 @@ def fixed_notch_filter(image: np.ndarray,
     H, W = image.shape
     mask = _notch_mask(H, W, known_frequencies, bandwidth)
     return apply_mask_to_image(image, mask)
+
+
+# ── Baseline 3: Automatic Detection + Fixed Notch ────────────────────────────
+
+def auto_fixed_notch_filter(image: np.ndarray,
+                            k: float = 5.0,
+                            bandwidth: float = 5.0,
+                            dc_radius: int = 20,
+                            max_peaks: int = 20) -> np.ndarray:
+    """
+    Automatic peak detection (same as proposed method) but with a
+    FIXED bandwidth instead of adaptive. This isolates the contribution
+    of the adaptive bandwidth component.
+
+    Parameters
+    ----------
+    image     : 2D float array [0, 1]
+    k         : peak detection threshold multiplier
+    bandwidth : fixed notch radius in frequency pixels
+    dc_radius : DC exclusion zone radius
+    max_peaks : max symmetric pairs to suppress
+
+    Returns
+    -------
+    Filtered image [0, 1]
+    """
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    from adaptive_notch import _magnitude_spectrum, detect_peaks, build_adaptive_mask
+
+    H, W = image.shape
+    spec  = _magnitude_spectrum(image)
+    peaks = detect_peaks(spec, k=k, dc_radius=dc_radius, max_peaks=max_peaks)
+
+    # Fixed bandwidth for all peaks (no amplitude-proportional scaling)
+    bw_map = {p: float(bandwidth) for p in peaks}
+    mask   = build_adaptive_mask(H, W, peaks, bw_map)
+
+    F = np.fft.fft2(image)
+    filtered = np.clip(np.real(np.fft.ifft2(F * mask)), 0.0, 1.0)
+    return filtered
